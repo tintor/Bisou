@@ -1,0 +1,107 @@
+package main
+
+type SQLParser Peg {
+    stack []*Node
+    size int
+}
+
+e <- s statement s !.
+
+statement <- show_tables / create_table / drop_table / select { Select(p.Get(1).args) } / insert / delete
+
+show_tables <- "show" w "tables" { ShowTables() }
+
+create_table <- "create" w "table" w ident { CreateTable(p.Get(1).name) }
+
+drop_table <- "drop" w "table" w ident { DropTable(p.Get(1).name) }
+
+insert <- "insert" w "into" w ident w (doc / select) { Insert(p.Get(2).name, p.Get(1)) }
+
+doc <- { p.Push("doc") } '{' s field (s ',' s field )* s '}'
+
+field <- ident s ':' s literal { p.Push(p.Get(2).name, p1).Append() }
+
+select <- { p.Push("select") } project s from (s where)? (s group_by)? (s having)? (s order_by)? (s limit)?
+
+delete <- { p.Push("delete") } "delete" w from1 (s where)? { Delete(p.Get(1).args) }
+
+project <- "select" w distinct? expr_as { p.Push1("project") } ( s ',' s expr_as { p.Append() })* { p.Append() }
+
+distinct <- "distinct" w { p.Push("distinct").Append() }
+
+from <- { p.Push("from") } "from" w table (s (',' s / "left" w "join" w) table)* { p.Append() }
+
+from1 <- { p.Push("from") } "from" w table { p.Append() }
+
+table <- (ident / '(' s select s ')') (s "as" w ident { p.Push2("as") })? { p.Append() }
+
+where <- "where" w expr { p.Push1("where").Append() }
+
+having <- "having" w expr { p.Push1("having").Append() }
+
+group_by <- "group" w "by" w expr { p.Push1("group_by") } ( s ',' s expr { p.Append() })* { p.Append() }
+
+partition_by <- "partition" w "by" w expr { p.Push1("group_by") } ( s ',' s expr { p.Append() })* { p.Append() }
+
+order_by <- "order" w "by" w expr_desc { p.Push1("order_by") } ( s ',' s expr_desc { p.Append() })* { p.Append() }
+
+limit <- "limit" w uint { p.Push1("limit") }
+
+expr_as <- expr (s "as" w ident { p.Push2("as") })?
+
+expr_desc <- expr (s "desc" !alphanum { p.Push1("desc") })?
+
+expr <- e2 ( s "or" s e2 { p.Push2("or") } )*
+
+e2 <- e3 ( s "and" s e3 { p.Push2("and") } )*
+
+e3 <- e4 s "between" w e4 s "and" w e4 { p.Push("and", Cons(">=", p3, p2), Cons("<=", p3, p1)) }
+    / e4 (s rel s e4 { p.Push(p.Get(2).name, p3, p1) })*
+    / e4 s in
+    / e4 s "not" w in { p.Push1("not"); }
+    / e4 s "like" w e4 { p.Push2("like") }
+
+in <- "in" w '(' s (list / select) s ')' { p.Push1("in") }
+
+e4 <- e5 ( s '+' s e5 { p.Push2("+") } / s '-' s e5 { p.Push2("-") } )*
+
+e5 <- e6 (s mul s e6 { p.Push(p.Get(2).name, p3, p1) })*
+
+rel <- < '=' / '<=' / '<' / '>=' / '>' / '<>' > { p.Push(buffer[begin:end]) }
+
+mul <- <[*/%]> { p.Push(buffer[begin:end]) }
+
+e6 <- '-' s e6 { p.Push1("negate") } / "not" w e6 { p.Push1("not") } / atom
+
+atom <- '(' s (expr / select ) s ')' / exists / func_over / literal / name
+
+exists <- "exists" w '(' s select s ')' { p.Push1("exists") }
+
+list <- { p.Push("list") } expr { p.Append() } (s ',' s expr { p.Append() })*
+
+func_over <- func (s "over" { p.Push1("over") } s '(' (s partition_by)? (s order_by)? s ')')?
+
+func <- "count" '(' s '*' s ')' { p.Push("count") }
+      / "count" '(' s "distinct" w expr s ')' { p.Push1("count_distinct") }
+      / "count" '(' s expr s ')' { p.Push1("count") }
+      / "sum" '(' s expr s ')' { p.Push1("sum") }
+
+name <- { p.Push("name") } ident { p.Append() } ('.' ident { p.Append() })*
+
+literal <- string { p.Push("str", p1) }
+         / null   { p.Push("null") }
+         / number { p.Push("num", p1) }
+
+null <- "null" !alphanum
+
+string <- (['] <(!['] .)*> ['] / ["] <(!["] .)*> ["]) { p.Push(buffer[begin:end]) }
+
+uint <- <[0-9]+ ![.0-9]> { p.Push(buffer[begin:end]) }
+
+number <- <'-'? [0-9]+ ('.' [0-9]+)? ![.0-9]> { p.Push(buffer[begin:end]) }
+
+w <- !alphanum s
+s <- space*
+space <- ' ' / '\t'
+ident <- (<![0-9] alphanum+> !alphanum / '`' <(!'`' .)*> '`') { p.Push(buffer[begin:end]) }
+alphanum <- [$_a-zA-Z0-9]
