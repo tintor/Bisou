@@ -7,15 +7,15 @@ type SQLParser Peg {
 
 e <- s statement s !.
 
-statement <- show_tables / create_table / drop_table / select { Select(p.Get(1).args) } / insert / delete
+statement <- show_tables / create_table / drop_table / select / insert / delete
 
-show_tables <- "show" w "tables" { ShowTables() }
+show_tables <- "show" w "tables" { p.Push("show_tables") }
 
-create_table <- "create" w "table" w ident { CreateTable(p.Get(1).name) }
+create_table <- "create" w "table" w ident { p.Push1("create_table") }
 
-drop_table <- "drop" w "table" w ident { DropTable(p.Get(1).name) }
+drop_table <- "drop" w "table" w ident { p.Push1("drop_table") }
 
-insert <- "insert" w "into" w ident w (doc / select) { Insert(p.Get(2).name, p.Get(1)) }
+insert <- "insert" w "into" w ident w (doc / select) { p.Push2("insert") }
 
 doc <- { p.Push("doc") } '{' s field (s ',' s field )* s '}'
 
@@ -23,9 +23,9 @@ field <- ident s ':' s literal { p.Push(p.Get(2).name, p1).Append() }
 
 select <- { p.Push("select") } project s from (s where)? (s group_by)? (s having)? (s order_by)? (s limit)?
 
-delete <- { p.Push("delete") } "delete" w from1 (s where)? { Delete(p.Get(1).args) }
+delete <- { p.Push("delete") } "delete" w from1 (s where)?
 
-project <- "select" w distinct? expr_as { p.Push1("project") } ( s ',' s expr_as { p.Append() })* { p.Append() }
+project <- "select" w distinct? { p.Push("project") } ('*' / expr_as (s ',' s expr_as)*) { p.Append() }
 
 distinct <- "distinct" w { p.Push("distinct").Append() }
 
@@ -47,7 +47,7 @@ order_by <- "order" w "by" w expr_desc { p.Push1("order_by") } ( s ',' s expr_de
 
 limit <- "limit" w uint { p.Push1("limit") }
 
-expr_as <- expr (s "as" w ident { p.Push2("as") })?
+expr_as <- expr (s "as" w ident { p.Push2("as") })? { p.Append() }
 
 expr_desc <- expr (s "desc" !alphanum { p.Push1("desc") })?
 
